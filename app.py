@@ -1,4 +1,3 @@
-
 import os
 import pickle
 
@@ -29,11 +28,8 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 # ==================================================
 
 st.set_page_config(
-
     page_title="Hospital Knowledge Assistant",
-
     page_icon="🏥",
-
     layout="wide"
 )
 
@@ -58,7 +54,6 @@ st.write(
 
 @st.cache_resource
 def load_embedding_model():
-
     return SentenceTransformer(
         EMBEDDING_MODEL
     )
@@ -70,7 +65,6 @@ def load_embedding_model():
 
 @st.cache_resource
 def load_faiss_data():
-
     index_path = os.path.join(
         FAISS_FOLDER,
         "index.faiss"
@@ -89,7 +83,6 @@ def load_faiss_data():
         chunks_path,
         "rb"
     ) as file:
-
         chunks = pickle.load(file)
 
     return index, chunks
@@ -101,13 +94,14 @@ def load_faiss_data():
 
 @st.cache_resource
 def load_groq_client():
-
     api_key = os.getenv(
         "GROQ_API_KEY"
     )
 
     if not api_key:
+        api_key = st.secrets.get("GROQ_API_KEY", "")
 
+    if not api_key:
         return None
 
     return Groq(
@@ -125,22 +119,16 @@ def retrieve_context(
     index,
     chunks
 ):
-
     query_embedding = embedding_model.encode(
-
         [query],
-
         convert_to_numpy=True,
-
         normalize_embeddings=True
     )
 
     scores, indices = index.search(
-
         query_embedding.astype(
             "float32"
         ),
-
         TOP_K
     )
 
@@ -150,13 +138,10 @@ def retrieve_context(
         scores[0],
         indices[0]
     ):
-
         if index_id == -1:
-
             continue
 
         chunk = chunks[index_id].copy()
-
         chunk["score"] = float(score)
 
         retrieved_chunks.append(
@@ -175,21 +160,17 @@ def generate_answer(
     retrieved_chunks,
     groq_client
 ):
-
     if groq_client is None:
-
         return (
             "GROQ_API_KEY is not configured. "
             "Please add your Groq API key "
-            "in Streamlit Secrets."
+            "in Streamlit Secrets or Environment Variables."
         )
 
     context_parts = []
 
     for chunk in retrieved_chunks:
-
         context_parts.append(
-
             f"""
 Source: {chunk['source']}
 Page: {chunk['page']}
@@ -239,23 +220,17 @@ knowledge base context.
 """
 
     response = groq_client.chat.completions.create(
-
         model=GROQ_MODEL,
-
         messages=[
-
             {
                 "role": "system",
                 "content": system_prompt
             },
-
             {
                 "role": "user",
                 "content": user_prompt
             }
-
         ],
-
         temperature=0.2
     )
 
@@ -278,24 +253,20 @@ chunks_path = os.path.join(
 
 
 if not os.path.exists(index_path):
-
     st.error(
         "FAISS index not found. "
-        "Make sure faiss_index/index.faiss "
+        "Make sure index.faiss "
         "exists in the repository."
     )
-
     st.stop()
 
 
 if not os.path.exists(chunks_path):
-
     st.error(
         "chunks.pkl not found. "
-        "Make sure faiss_index/chunks.pkl "
+        "Make sure chunks.pkl "
         "exists in the repository."
     )
-
     st.stop()
 
 
@@ -304,9 +275,7 @@ if not os.path.exists(chunks_path):
 # ==================================================
 
 embedding_model = load_embedding_model()
-
 index, chunks = load_faiss_data()
-
 groq_client = load_groq_client()
 
 
@@ -315,7 +284,6 @@ groq_client = load_groq_client()
 # ==================================================
 
 with st.sidebar:
-
     st.header("📊 Knowledge Base")
 
     st.write(
@@ -327,8 +295,7 @@ with st.sidebar:
     )
 
     st.write(
-        f"Embedding model: "
-        f"`all-MiniLM-L6-v2`"
+        f"Embedding model: `all-MiniLM-L6-v2`"
     )
 
     st.divider()
@@ -342,131 +309,66 @@ with st.sidebar:
 
 
 # ==================================================
-# QUESTION
+# CHAT SESSION STATE & DISPLAY
 # ==================================================
 
-query = st.text_input(
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    "Ask a question",
-
-    placeholder=(
-        "Example: What emergency services "
-        "does the hospital provide?"
-    )
-)
+# Pehle se mojood messages render karein
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        if "retrieved_chunks" in msg:
+            st.divider()
+            st.subheader("📚 Retrieved RAG Context")
+            for number, chunk in enumerate(msg["retrieved_chunks"], start=1):
+                with st.expander(
+                    f"Context {number} — {chunk['source']} (Page {chunk['page']})"
+                ):
+                    st.write(chunk["text"])
+                    st.caption(f"Similarity score: {chunk['score']:.4f}")
 
 
 # ==================================================
-# ASK BUTTON
+# CHAT INPUT & EXECUTION
 # ==================================================
 
-if st.button(
-    "🔎 Ask",
-    type="primary"
-):
+if prompt := st.chat_input("Ask a question about the hospital knowledge base..."):
+    # User message show karein aur state mein save karein
+    st.chat_message("user").write(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
-    if not query.strip():
-
-        st.warning(
-            "Please enter a question."
+    # RAG Execution
+    with st.spinner("Searching knowledge base & generating answer..."):
+        retrieved_chunks = retrieve_context(
+            prompt,
+            embedding_model,
+            index,
+            chunks
         )
 
-    else:
-
-        # ------------------------------
-        # RETRIEVAL
-        # ------------------------------
-
-        with st.spinner(
-            "Searching knowledge base..."
-        ):
-
-            retrieved_chunks = retrieve_context(
-
-                query,
-
-                embedding_model,
-
-                index,
-
-                chunks
-            )
-
-
-        # ------------------------------
-        # GENERATION
-        # ------------------------------
-
-        with st.spinner(
-            "Generating answer..."
-        ):
-
-            answer = generate_answer(
-
-                query,
-
-                retrieved_chunks,
-
-                groq_client
-            )
-
-
-        # ------------------------------
-        # ANSWER
-        # ------------------------------
-
-        st.subheader(
-            "💬 Answer"
-        )
-
-        st.write(
-            answer
-        )
-
-
-        # ------------------------------
-        # RAG CONTEXT
-        # ------------------------------
-
-        st.divider()
-
-        st.subheader(
-            "📚 Retrieved RAG Context"
-        )
-
-        st.caption(
-            "These are the chunks retrieved "
-            "from the hospital knowledge base."
-        )
-
-
-        for number, chunk in enumerate(
-
+        answer = generate_answer(
+            prompt,
             retrieved_chunks,
+            groq_client
+        )
 
-            start=1
-        ):
-
+    # Assistant message display karein
+    with st.chat_message("assistant"):
+        st.write(answer)
+        st.divider()
+        st.subheader("📚 Retrieved RAG Context")
+        for number, chunk in enumerate(retrieved_chunks, start=1):
             with st.expander(
-
-                f"Context {number} — "
-                f"{chunk['source']} "
-                f"(Page {chunk['page']})"
+                f"Context {number} — {chunk['source']} (Page {chunk['page']})"
             ):
+                st.write(chunk["text"])
+                st.caption(f"Similarity score: {chunk['score']:.4f}")
 
-                st.write(
-                    chunk["text"]
-                )
-
-                st.caption(
-
-                    f"Similarity score: "
-                    f"{chunk['score']:.4f}"
-                )
-
-                st.caption(
-
-                    f"Source: "
-                    f"{chunk['source']} | "
-                    f"Page: {chunk['page']}"
-                )
+    # State mein save karein taake refresh ke baad bhi rahe
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer,
+        "retrieved_chunks": retrieved_chunks
+    })
